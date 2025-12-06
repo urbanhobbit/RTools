@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 import io
+from info_content import variable_info_md
 
 # -------------------------------------------------
 # Page setup
@@ -113,13 +114,34 @@ with st.sidebar.expander("1. Data Selection", expanded=True):
     
     dom_df = long_df[long_df["Domain"] == selected_domain]
     
+    # Show availability info
+    avail_years = sorted(dom_df["Year"].unique())
+    if avail_years:
+        st.caption(f"📅 Data available: {min(avail_years)} - {max(avail_years)}")
+    
     # Questions within domain
     questions = sorted(dom_df["Question"].unique())
-    default_q = [questions[0]] if questions else []
-    selected_questions = st.multiselect(
+    
+    # --- Select All / Clear All Buttons ---
+    c_all, c_clear = st.columns(2)
+    
+    # We use a session state key for the multiselect to allow buttons to control it
+    if "selected_questions_key" not in st.session_state:
+        st.session_state.selected_questions_key = [questions[0]] if questions else []
+        
+    if c_all.button("Select All"):
+        st.session_state.selected_questions_key = questions
+        st.rerun()
+        
+    if c_clear.button("Clear All"):
+        st.session_state.selected_questions_key = []
+        st.rerun()
+
+    selected_questions = st.pills(
         "Indicators (questions)",
         questions,
-        default=default_q
+        selection_mode="multi",
+        key="selected_questions_key"
     )
     
     # Countries
@@ -230,218 +252,305 @@ if missing_countries:
 # Main Content: Dashboard Layout
 # -------------------------------------------------
 
-# --- 1. KPI Metrics ---
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Countries", len(selected_countries))
-m2.metric("Indicators", len(selected_questions))
-m3.metric("Years", f"{selected_year_range[0]} - {selected_year_range[1]}")
-m4.metric("Data Points", len(plot_df))
+tab1, tab2 = st.tabs(["📈 Dashboard", "ℹ️ Variable Definitions"])
 
-st.divider()
+with tab1:
+    # --- 1. KPI Metrics ---
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Countries", len(selected_countries))
+    m2.metric("Indicators", len(selected_questions))
+    m3.metric("Years", f"{selected_year_range[0]} - {selected_year_range[1]}")
+    m4.metric("Data Points", len(plot_df))
 
-# --- 2. Chart Section ---
-st.subheader(f"📈 Analysis: {selected_domain}")
+    st.divider()
 
-# --- Style helpers ---
-def get_country_color_encoding():
-    """Color mapping for countries, depending on graph style."""
-    if graph_style == "Colorblind-safe (default)":
-        palette = [
-            "#1b9e77", "#d95f02", "#7570b3", "#e7298a",
-            "#66a61e", "#e6ab02", "#a6761d", "#666666"
-        ]
-        return alt.Color(
-            "Country:N",
-            title="Country",
-            scale=alt.Scale(range=palette)
+    # --- 2. Chart Section ---
+    st.subheader(f"📈 Analysis: {selected_domain}")
+
+    # --- Style helpers ---
+    def get_country_color_encoding():
+        """Color mapping for countries, depending on graph style."""
+        if graph_style == "Colorblind-safe (default)":
+            palette = [
+                "#1b9e77", "#d95f02", "#7570b3", "#e7298a",
+                "#66a61e", "#e6ab02", "#a6761d", "#666666"
+            ]
+            return alt.Color(
+                "Country:N",
+                title="Country",
+                scale=alt.Scale(range=palette)
+            )
+
+        if graph_style == "Monochrome (blue shades)":
+            return alt.Color(
+                "Country:N",
+                title="Country",
+                scale=alt.Scale(scheme="blues")
+            )
+
+        if graph_style == "Highlight focal country" and focal_country is not None:
+            return alt.condition(
+                alt.datum.Country == focal_country,
+                alt.value("#1f77b4"),   # highlight
+                alt.value("#CCCCCC")    # others
+            )
+
+        return alt.value("black")
+
+
+    def get_stroke_dash_encoding():
+        """Line style mapping (used for black & white)."""
+        if graph_style == "Black & white (line styles)":
+            return alt.StrokeDash(
+                "Country:N",
+                title="Country",
+                sort=selected_countries
+            )
+        return alt.value([1, 0])
+
+
+    def style_chart(chart: alt.Chart) -> alt.Chart:
+        """Apply theme preset: fonts, fill, grid, legend, etc."""
+        chart = chart.configure_axis(
+            labelFontSize=13,
+            titleFontSize=15
+        ).configure_legend(
+            titleFontSize=14,
+            labelFontSize=12
+        ).configure_title(
+            fontSize=18,
+            anchor="start"
         )
 
-    if graph_style == "Monochrome (blue shades)":
-        return alt.Color(
-            "Country:N",
-            title="Country",
-            scale=alt.Scale(scheme="blues")
+        if theme == "Academic (light)":
+            chart = chart.configure_view(strokeWidth=0, fill="white").configure_axis(grid=True, gridColor="#DDDDDD")
+        elif theme == "OECD grey":
+            chart = chart.configure_view(stroke="#CCCCCC", strokeWidth=1, fill="white").configure_axis(grid=True, gridColor="#E0E0E0")
+        elif theme == "Dark dashboard":
+            chart = chart.configure_view(strokeWidth=0, fill="#111111").configure_axis(
+                labelColor="white", titleColor="white", grid=True, gridColor="#333333"
+            ).configure_legend(titleColor="white", labelColor="white").configure_title(color="white")
+        elif theme == "Pastel report":
+            chart = chart.configure_view(strokeWidth=0, fill="#FAFAFA").configure_axis(grid=True, gridColor="#F0F0F0")
+        elif theme == "The Economist":
+            # Economist style: Blue-gray background, horizontal grid only usually, but we keep grid simple
+            chart = chart.configure_view(strokeWidth=0, fill="#d5e4eb").configure_axis(
+                grid=True, gridColor="white", labelFont="Verdana", titleFont="Verdana"
+            ).configure_title(font="Verdana", fontSize=20).configure_legend(labelFont="Verdana", titleFont="Verdana")
+        elif theme == "Financial Times":
+            # FT style: Salmon/Pinkish background
+            chart = chart.configure_view(strokeWidth=0, fill="#fff1e0").configure_axis(
+                grid=True, gridColor="#e3cbb0", labelFont="Georgia", titleFont="Georgia"
+            ).configure_title(font="Georgia", fontSize=20).configure_legend(labelFont="Georgia", titleFont="Georgia")
+
+        return chart
+
+    color_encoding = get_country_color_encoding()
+    stroke_dash_encoding = get_stroke_dash_encoding()
+
+    # --- Plotting Logic ---
+
+    def create_single_chart(data, title_text, x_axis_title="Year", y_axis_title="Value", color_enc=None, dash_enc=None, x_off=None):
+        base = alt.Chart(data)
+        if chart_type == "Bar Chart":
+            mark = base.mark_bar()
+        else:
+            mark = base.mark_line(point=True)
+        
+        chart = mark.encode(
+            x=alt.X("Year:O", title=x_axis_title),
+            y=alt.Y("value:Q", title=y_axis_title),
+            color=color_enc,
+            strokeDash=dash_enc,
+            xOffset=x_off,
+            tooltip=["Country", "Year", "Question", "value"]
+        ).properties(
+            title=title_text,
+            height=450 # Fixed height, width will be responsive
         )
+        return style_chart(chart)
 
-    if graph_style == "Highlight focal country" and focal_country is not None:
-        return alt.condition(
-            alt.datum.Country == focal_country,
-            alt.value("#1f77b4"),   # highlight
-            alt.value("#CCCCCC")    # others
-        )
-
-    return alt.value("black")
-
-
-def get_stroke_dash_encoding():
-    """Line style mapping (used for black & white)."""
-    if graph_style == "Black & white (line styles)":
-        return alt.StrokeDash(
-            "Country:N",
-            title="Country",
-            sort=selected_countries
-        )
-    return alt.value([1, 0])
-
-
-def style_chart(chart: alt.Chart) -> alt.Chart:
-    """Apply theme preset: fonts, fill, grid, legend, etc."""
-    chart = chart.configure_axis(
-        labelFontSize=13,
-        titleFontSize=15
-    ).configure_legend(
-        titleFontSize=14,
-        labelFontSize=12
-    ).configure_title(
-        fontSize=18,
-        anchor="start"
-    )
-
-    if theme == "Academic (light)":
-        chart = chart.configure_view(strokeWidth=0, fill="white").configure_axis(grid=True, gridColor="#DDDDDD")
-    elif theme == "OECD grey":
-        chart = chart.configure_view(stroke="#CCCCCC", strokeWidth=1, fill="white").configure_axis(grid=True, gridColor="#E0E0E0")
-    elif theme == "Dark dashboard":
-        chart = chart.configure_view(strokeWidth=0, fill="#111111").configure_axis(
-            labelColor="white", titleColor="white", grid=True, gridColor="#333333"
-        ).configure_legend(titleColor="white", labelColor="white").configure_title(color="white")
-    elif theme == "Pastel report":
-        chart = chart.configure_view(strokeWidth=0, fill="#FAFAFA").configure_axis(grid=True, gridColor="#F0F0F0")
-    elif theme == "The Economist":
-        # Economist style: Blue-gray background, horizontal grid only usually, but we keep grid simple
-        chart = chart.configure_view(strokeWidth=0, fill="#d5e4eb").configure_axis(
-            grid=True, gridColor="white", labelFont="Verdana", titleFont="Verdana"
-        ).configure_title(font="Verdana", fontSize=20).configure_legend(labelFont="Verdana", titleFont="Verdana")
-    elif theme == "Financial Times":
-        # FT style: Salmon/Pinkish background
-        chart = chart.configure_view(strokeWidth=0, fill="#fff1e0").configure_axis(
-            grid=True, gridColor="#e3cbb0", labelFont="Georgia", titleFont="Georgia"
-        ).configure_title(font="Georgia", fontSize=20).configure_legend(labelFont="Georgia", titleFont="Georgia")
-
-    return chart
-
-color_encoding = get_country_color_encoding()
-stroke_dash_encoding = get_stroke_dash_encoding()
-
-# --- Plotting Logic ---
-# --- Plotting Logic ---
-
-def create_single_chart(data, title_text, x_axis_title="Year", y_axis_title="Value", color_enc=None, dash_enc=None, x_off=None):
-    base = alt.Chart(data)
-    if chart_type == "Bar Chart":
-        mark = base.mark_bar()
-    else:
-        mark = base.mark_line(point=True)
-    
-    chart = mark.encode(
-        x=alt.X("Year:O", title=x_axis_title),
-        y=alt.Y("value:Q", title=y_axis_title),
-        color=color_enc,
-        strokeDash=dash_enc,
-        xOffset=x_off,
-        tooltip=["Country", "Year", "Question", "value"]
-    ).properties(
-        title=title_text,
-        height=450 # Fixed height, width will be responsive
-    )
-    return style_chart(chart)
-
-if layout == "Single figure (all countries)":
-    if len(selected_questions) > 1:
-        # Multiple indicators -> Grid of charts, one per indicator
-        cols = st.columns(grid_columns)
-        for i, q in enumerate(selected_questions):
-            # Filter data for this question
-            q_data = plot_df[plot_df["Question"] == q]
-            
-            # Create chart
+    if layout == "Single figure (all countries)":
+        if len(selected_questions) > 1:
+            # Multiple indicators -> Grid of charts, one per indicator
+            cols = st.columns(grid_columns)
+            for i, q in enumerate(selected_questions):
+                # Filter data for this question
+                q_data = plot_df[plot_df["Question"] == q]
+                
+                # Create chart
+                chart = create_single_chart(
+                    q_data, 
+                    title_text=f"{q}",
+                    y_axis_title="Value",
+                    color_enc=color_encoding,
+                    dash_enc=stroke_dash_encoding if chart_type == "Line Chart" else alt.value([0,0]),
+                    x_off="Country:N" if chart_type == "Bar Chart" else alt.value(0)
+                )
+                
+                # Place in column
+                with cols[i % grid_columns]:
+                    st.altair_chart(chart, use_container_width=True)
+                    
+        else:
+            # One indicator -> Single chart
             chart = create_single_chart(
-                q_data, 
-                title_text=f"{q}",
-                y_axis_title="Value",
+                plot_df,
+                title_text=f"{selected_questions[0]} – {selected_domain}",
+                y_axis_title=selected_questions[0],
                 color_enc=color_encoding,
                 dash_enc=stroke_dash_encoding if chart_type == "Line Chart" else alt.value([0,0]),
                 x_off="Country:N" if chart_type == "Bar Chart" else alt.value(0)
+            )
+            st.altair_chart(chart, use_container_width=True)
+
+    else:
+        # Country panels -> Grid of charts, one per country
+        if graph_style == "Black & white (line styles)":
+            panel_color = alt.value("black")
+            panel_dash = alt.StrokeDash("Question:N", title="Indicator")
+        else:
+            panel_color = alt.Color("Question:N", title="Indicator")
+            panel_dash = alt.value([1, 0])
+            
+        cols = st.columns(grid_columns)
+        for i, country in enumerate(selected_countries):
+            # Filter data for this country
+            c_data = plot_df[plot_df["Country"] == country]
+            
+            if c_data.empty: continue
+
+            # Create chart
+            chart = create_single_chart(
+                c_data,
+                title_text=f"{country}",
+                y_axis_title="Value",
+                color_enc=panel_color,
+                dash_enc=panel_dash if chart_type == "Line Chart" else alt.value([0,0]),
+                x_off="Question:N" if chart_type == "Bar Chart" else alt.value(0)
             )
             
             # Place in column
             with cols[i % grid_columns]:
                 st.altair_chart(chart, use_container_width=True)
-                
-    else:
-        # One indicator -> Single chart
-        chart = create_single_chart(
-            plot_df,
-            title_text=f"{selected_questions[0]} – {selected_domain}",
-            y_axis_title=selected_questions[0],
-            color_enc=color_encoding,
-            dash_enc=stroke_dash_encoding if chart_type == "Line Chart" else alt.value([0,0]),
-            x_off="Country:N" if chart_type == "Bar Chart" else alt.value(0)
-        )
-        st.altair_chart(chart, use_container_width=True)
-
-else:
-    # Country panels -> Grid of charts, one per country
-    if graph_style == "Black & white (line styles)":
-        panel_color = alt.value("black")
-        panel_dash = alt.StrokeDash("Question:N", title="Indicator")
-    else:
-        panel_color = alt.Color("Question:N", title="Indicator")
-        panel_dash = alt.value([1, 0])
-        
-    cols = st.columns(grid_columns)
-    for i, country in enumerate(selected_countries):
-        # Filter data for this country
-        c_data = plot_df[plot_df["Country"] == country]
-        
-        if c_data.empty: continue
-
-        # Create chart
-        chart = create_single_chart(
-            c_data,
-            title_text=f"{country}",
-            y_axis_title="Value",
-            color_enc=panel_color,
-            dash_enc=panel_dash if chart_type == "Line Chart" else alt.value([0,0]),
-            x_off="Question:N" if chart_type == "Bar Chart" else alt.value(0)
-        )
-        
-        # Place in column
-        with cols[i % grid_columns]:
-            st.altair_chart(chart, use_container_width=True)
 
 
 
-# --- 3. Footer / Export ---
-st.divider()
-with st.expander("📥 Export & Data View", expanded=False):
-    c1, c2 = st.columns([1, 3])
-    with c1:
-        st.markdown("### Download")
-        csv = plot_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            "Download CSV",
-            csv,
-            "filtered_data.csv",
-            "text/csv",
-            key='download-csv',
-            use_container_width=True
-        )
-        
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            plot_df.to_excel(writer, sheet_name='Data', index=False)
-        
-        st.download_button(
-            "Download Excel",
-            buffer.getvalue(),
-            "filtered_data.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key='download-excel',
-            use_container_width=True
-        )
+    # --- 3. Footer / Export ---
+    st.divider()
     
-    with c2:
-        st.markdown("### Raw Data Preview")
-        st.dataframe(plot_df, height=200, use_container_width=True)
+    # --- Selected Indicator Definitions ---
+    if selected_questions:
+        st.subheader("📖 Indicator Definitions")
+        from info_content import get_schema_dict, get_item_descriptions
+        schema = get_schema_dict()
+        item_descs = get_item_descriptions()
+        
+        for q in selected_questions:
+            info = schema.get(q)
+            if info:
+                with st.expander(f"ℹ️ {q}", expanded=False):
+                    items_used = info.get('Items Used', 'N/A')
+                    st.markdown(f"""
+                    - **Interpretation**: {info.get('Interpretation', 'N/A')}
+                    - **Method**: {info.get('Method', 'N/A')}
+                    - **Items Used**: {items_used}
+                    - **Domain**: {info.get('Domain', 'N/A')}
+                    """)
+                    
+                    # Try to find relevant item descriptions
+                    found_items = []
+                    # Simple heuristic: check if any known item code is present in the "Items Used" string
+                    # or if the item code is part of a range (e.g. A065 in A065-A074)
+                    # Since ranges are hard to parse perfectly without logic, we'll just iterate all items 
+                    # and see if they "look like" they belong.
+                    # Actually, let's just check if the item code appears in the string first.
+                    
+                    # Better approach: Iterate through all item codes. If the code is in the string, add it.
+                    # For ranges like A065-A074, the string contains "A065" and "A074". 
+                    # Intermediate items (A066) won't be found by simple string search.
+                    # But often the text description has them all. 
+                    # Let's try a smarter check: 
+                    # 1. Exact match in string
+                    # 2. Range check?
+                    
+                    # For now, let's just show items that are explicitly mentioned or if we can parse the range.
+                    # Let's do a simple check: if the item code is a substring of "Items Used", show it.
+                    # This misses the "middle" of ranges.
+                    
+                    # Let's try to parse ranges in "Items Used"
+                    # e.g. "A065–A074" -> A065, A074 and everything in between?
+                    # Since codes are alphanumeric, "in between" is tricky.
+                    # But we have the list of ALL items. We can sort them.
+                    
+                    relevant_items = []
+                    for code, desc in item_descs.items():
+                        # Check if code is in items_used string
+                        if code in items_used:
+                            relevant_items.append(f"- **{code}**: {desc}")
+                        else:
+                            # Check for range: "START-END"
+                            # If code is lexicographically between START and END, and shares prefix
+                            import re
+                            # Match ranges like A065-A074 or A065–A074
+                            ranges = re.findall(r'([A-Z]\d+)[-–—]([A-Z]\d+)', items_used)
+                            for start, end in ranges:
+                                # Check if same prefix
+                                if start[0] == end[0] == code[0]:
+                                    # Check numeric part
+                                    try:
+                                        s_num = int(start[1:])
+                                        e_num = int(end[1:])
+                                        c_num = int(code[1:])
+                                        if s_num <= c_num <= e_num:
+                                            relevant_items.append(f"- **{code}**: {desc}")
+                                            break
+                                    except:
+                                        pass
+
+                    if relevant_items:
+                        st.markdown("**Constituent Items:**")
+                        # Deduplicate and sort
+                        relevant_items = sorted(list(set(relevant_items)))
+                        for item_txt in relevant_items:
+                            st.markdown(item_txt)
+
+            else:
+                pass
+
+    st.divider()
+    with st.expander("📥 Export & Data View", expanded=False):
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            st.markdown("### Download")
+            csv = plot_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                "Download CSV",
+                csv,
+                "filtered_data.csv",
+                "text/csv",
+                key='download-csv',
+                use_container_width=True
+            )
+            
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                plot_df.to_excel(writer, sheet_name='Data', index=False)
+            
+            st.download_button(
+                "Download Excel",
+                buffer.getvalue(),
+                "filtered_data.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key='download-excel',
+                use_container_width=True
+            )
+        
+        with c2:
+            st.markdown("### Raw Data Preview")
+            st.dataframe(plot_df, height=200, use_container_width=True)
+
+with tab2:
+    st.markdown(variable_info_md)
+
 
