@@ -24,10 +24,15 @@ st.markdown(
 # -------------------------------------------------
 # Load & reshape data
 # -------------------------------------------------
+import os
+
+# -------------------------------------------------
+# Load & reshape data
+# -------------------------------------------------
 @st.cache_data
-def load_long_data(path: str = "Results.xlsx", sheet: str = "Sheet1") -> pd.DataFrame:
+def load_long_data(file_input, sheet: str = "Sheet1") -> pd.DataFrame:
     try:
-        raw = pd.read_excel(path, sheet_name=sheet)
+        raw = pd.read_excel(file_input, sheet_name=sheet)
 
         # Assume first two columns are Domain and Question
         col0, col1 = raw.columns[0], raw.columns[1]
@@ -66,11 +71,34 @@ def load_long_data(path: str = "Results.xlsx", sheet: str = "Sheet1") -> pd.Data
         st.error(f"Error loading data: {e}")
         return pd.DataFrame()
 
+# Check if default file exists (case-insensitive search)
+default_filename = "Results.xlsx"
+data_source = None
 
-long_df = load_long_data()
+# Try exact match first
+if os.path.exists(default_filename):
+    data_source = default_filename
+else:
+    # Try case-insensitive match in current directory
+    files = [f for f in os.listdir('.') if os.path.isfile(f)]
+    for f in files:
+        if f.lower() == default_filename.lower():
+            data_source = f
+            break
 
-if long_df.empty:
+if not data_source:
+    st.warning(f"⚠️ '{default_filename}' not found in the current directory. Please upload the data file.")
+    uploaded_file = st.sidebar.file_uploader("Upload Data File", type=["xlsx"])
+    if uploaded_file:
+        data_source = uploaded_file
+
+if data_source:
+    long_df = load_long_data(data_source)
+else:
+    st.info("Waiting for data file...")
     st.stop()
+
+
 
 # -------------------------------------------------
 # Sidebar controls
